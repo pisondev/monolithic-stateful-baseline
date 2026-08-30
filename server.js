@@ -38,11 +38,16 @@ const ENTRY_PATH = '/server.js';
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 32, saltBytes: 16 };
 const USERNAME_PATTERN = /^[a-z0-9._-]+$/;
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const LIMITS = {
   username: { min: 3, max: 32 },
   password: { min: 8, max: 200 },
   nama: { min: 1, max: 100 },
   no_id: { max: 32 },
+  judul: { min: 1, max: 150 },
+  isi: { max: 20000 },
+  kategori: { min: 1, max: 50 },
+  keywords: { max: 200 },
 };
 
 // 3. DATABASE
@@ -369,6 +374,48 @@ function requirePassword(fields) {
   return value;
 }
 
+// toISOString would report yesterday for anyone east of UTC before their morning
+function todayLocal(now = new Date()) {
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+// the brief lists tgl_submit as an input, so it is taken from the client rather than
+// stamped by the server, and today is only the fallback when the field is absent
+function requireDate(fields, name) {
+  const value = typeof fields[name] === 'string' ? fields[name].trim() : '';
+  if (!value) return todayLocal();
+
+  if (!DATE_PATTERN.test(value)) {
+    throw new HttpError(400, `${name} harus berformat YYYY-MM-DD`);
+  }
+
+  // the pattern accepts 2026-02-30, so the parts have to survive a real date round trip
+  const [year, month, day] = value.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    throw new HttpError(400, `${name} bukan tanggal yang ada`);
+  }
+
+  return value;
+}
+
+// only trailing space is stripped, because a poem may open with deliberate indentation
+function requirePoemBody(fields) {
+  const raw = typeof fields.isi === 'string' ? fields.isi : '';
+  const value = raw.replace(/\r\n/g, '\n').replace(/\s+$/, '');
+
+  if (!value.trim()) throw new HttpError(400, 'isi wajib diisi');
+  if (value.length > LIMITS.isi.max) {
+    throw new HttpError(400, `isi maksimal ${LIMITS.isi.max} karakter`);
+  }
+
+  return value;
+}
+
 // lowercased so someone who registers as Budi can still log in as budi
 function requireUsername(fields) {
   const value = requireText(fields, 'username', LIMITS.username).toLowerCase();
@@ -443,6 +490,25 @@ async function login(req, res, ctx) {
   sendJson(res, 200, { ok: true, username: user.username, nama: user.nama });
 }
 
+async function submitPuisi(req, res, ctx, { session }) {
+  const fields = await readFields(req);
+  const judul = requireText(fields, 'judul', LIMITS.judul);
+  const isi = requirePoemBody(fields);
+  const kategori = requireText(fields, 'kategori', LIMITS.kategori);
+  const tglSubmit = requireDate(fields, 'tgl_submit');
+
+  // the input is named keywords, the mandated column is keyword
+  const keyword = optionalText(fields, 'keywords', LIMITS.keywords);
+
+  const info = ctx.db
+    .prepare(
+      'INSERT INTO puisi (user_id, judul, tgl_submit, isi, kategori, keyword) VALUES (?, ?, ?, ?, ?, ?)',
+    )
+    .run(session.userId, judul, tglSubmit, isi, kategori, keyword);
+
+  sendJson(res, 201, { ok: true, id: Number(info.lastInsertRowid) });
+}
+
 function notImplemented() {
   throw new HttpError(501, 'aksi ini belum tersedia');
 }
@@ -454,7 +520,7 @@ function notImplemented() {
 const ROUTES = {
   register: { method: 'POST', handler: register },
   login: { method: 'POST', handler: login },
-  submit_puisi: { method: 'POST', auth: true, handler: notImplemented },
+  submit_puisi: { method: 'POST', auth: true, handler: submitPuisi },
   daftar_puisi: { method: 'GET', auth: true, handler: notImplemented },
 };
 
@@ -558,6 +624,10 @@ module.exports = {
   requireUsername,
   register,
   login,
+  submitPuisi,
+  todayLocal,
+  requireDate,
+  requirePoemBody,
   handleRequest,
   createSessionStore,
   sessionOf,
