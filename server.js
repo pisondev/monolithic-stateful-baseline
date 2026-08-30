@@ -4,6 +4,7 @@
 
 // 1. IMPORTS
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
@@ -20,6 +21,17 @@ const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES) || 64 * 1024;
 
 // how much oversized payload to drain before cutting the socket, so 413 still reaches the client
 const DRAIN_LIMIT_FACTOR = 4;
+
+const SESSION_COOKIE = 'SID';
+const SESSION_ID_BYTES = 32;
+
+// off by default because the brief deploys over plain http, where a Secure cookie would
+// never be sent back; turn it on the moment anything terminates tls in front
+const COOKIE_SECURE = process.env.COOKIE_SECURE === '1';
+
+// lower this to a few seconds to demonstrate expiry live in class
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || 30 * 60 * 1000;
+const SESSION_SWEEP_MS = Number(process.env.SESSION_SWEEP_MS) || 60 * 1000;
 
 // mirrors the server.php?aksi= example in the brief, so every action shares one path
 const ENTRY_PATH = '/server.js';
@@ -168,13 +180,120 @@ async function readFields(req) {
   return parseBody(await readBody(req), req.headers['content-type']);
 }
 
-// 5. ACTIONS
+// 5. SESSION
+
+function parseCookies(header) {
+  const jar = Object.create(null);
+  if (!header) return jar;
+
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 1) continue;
+
+    const name = part.slice(0, eq).trim();
+    const raw = part.slice(eq + 1).trim();
+    if (!name) continue;
+
+    // a malformed escape such as %zz would otherwise throw and drop the whole jar
+    try {
+      jar[name] = decodeURIComponent(raw);
+    } catch {
+      jar[name] = raw;
+    }
+  }
+
+  return jar;
+}
+
+function buildSetCookie(name, value, { maxAgeSeconds, secure = COOKIE_SECURE } = {}) {
+  const parts = [`${name}=${value}`, 'Path=/', 'HttpOnly', 'SameSite=Lax'];
+  if (secure) parts.push('Secure');
+  if (maxAgeSeconds !== undefined) parts.push(`Max-Age=${maxAgeSeconds}`);
+  return parts.join('; ');
+}
+
+// state lives in this process and nowhere else, which is the point of the baseline:
+// restart the process or add a second instance and every session here is gone
+function createSessionStore({ ttlMs = SESSION_TTL_MS } = {}) {
+  const sessions = new Map();
+
+  function expired(session, now) {
+    return now - session.createdAt > ttlMs;
+  }
+
+  function create(user) {
+    const id = crypto.randomBytes(SESSION_ID_BYTES).toString('hex');
+    const now = Date.now();
+    sessions.set(id, {
+      userId: user.id,
+      username: user.username,
+      nama: user.nama,
+      createdAt: now,
+      lastSeen: now,
+    });
+    return id;
+  }
+
+  function get(id) {
+    if (!id) return null;
+
+    const session = sessions.get(id);
+    if (!session) return null;
+
+    const now = Date.now();
+    if (expired(session, now)) {
+      sessions.delete(id);
+      return null;
+    }
+
+    session.lastSeen = now;
+    return session;
+  }
+
+  function sweep(now = Date.now()) {
+    let removed = 0;
+    for (const [id, session] of sessions) {
+      if (expired(session, now)) {
+        sessions.delete(id);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  function startSweeper(intervalMs = SESSION_SWEEP_MS) {
+    const timer = setInterval(sweep, intervalMs);
+
+    // unref keeps this timer from holding the process, and the test runner, alive
+    timer.unref();
+    return timer;
+  }
+
+  return {
+    create,
+    get,
+    sweep,
+    startSweeper,
+    ttlMs,
+    destroy: (id) => sessions.delete(id),
+    clear: () => sessions.clear(),
+    get size() {
+      return sessions.size;
+    },
+  };
+}
+
+function sessionOf(req, ctx) {
+  return ctx.sessions.get(parseCookies(req.headers.cookie)[SESSION_COOKIE]);
+}
+
+// 6. ACTIONS
 
 function notImplemented() {
   throw new HttpError(501, 'aksi ini belum tersedia');
 }
 
-// 6. ROUTER
+// 7. ROUTER
 
 const ROUTES = {
   register: { method: 'POST', handler: notImplemented },
@@ -183,7 +302,7 @@ const ROUTES = {
   daftar_puisi: { method: 'GET', handler: notImplemented },
 };
 
-async function handleRequest(req, res, db) {
+async function handleRequest(req, res, ctx) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
   if (url.pathname !== ENTRY_PATH) {
@@ -207,49 +326,54 @@ async function handleRequest(req, res, db) {
     throw new HttpError(405, `aksi ${aksi} hanya menerima ${route.method}`);
   }
 
-  await route.handler(req, res, db, url);
+  await route.handler(req, res, ctx, url);
 }
 
-function createServer(db) {
+function createServer(ctx) {
   return http.createServer((req, res) => {
-    handleRequest(req, res, db).catch((err) => sendError(res, err));
+    handleRequest(req, res, ctx).catch((err) => sendError(res, err));
   });
 }
 
-// 7. ENTRY POINT
+// 8. ENTRY POINT
 
 function start() {
   const dbPath = process.env.DB_PATH || DEFAULT_DB_PATH;
   const port = Number(process.env.PORT) || DEFAULT_PORT;
-  const db = openDatabase(dbPath);
-  const server = createServer(db);
+  const ctx = { db: openDatabase(dbPath), sessions: createSessionStore() };
+  const server = createServer(ctx);
+
+  ctx.sessions.startSweeper();
 
   server.listen(port, () => {
     console.log(`listening on http://localhost:${port}${ENTRY_PATH}?aksi=`);
-    console.log(`database ${dbPath}, foreign keys ${foreignKeysEnabled(db) ? 'on' : 'off'}`);
+    console.log(`database ${dbPath}, foreign keys ${foreignKeysEnabled(ctx.db) ? 'on' : 'off'}`);
+    console.log(`sessions in memory, ttl ${ctx.sessions.ttlMs} ms, lost on restart`);
   });
 
   // systemd sends SIGTERM on restart, and the in-memory sessions die with the process
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => server.close(() => {
-      db.close();
+      ctx.db.close();
       process.exit(0);
     }));
   }
 
-  return { server, db };
+  return { server, ctx };
 }
 
 if (require.main === module) {
   start();
 }
 
-// 8. EXPORTS
+// 9. EXPORTS
 
 module.exports = {
   DEFAULT_DB_PATH,
   DEFAULT_PORT,
   MAX_BODY_BYTES,
+  SESSION_COOKIE,
+  SESSION_TTL_MS,
   ENTRY_PATH,
   SCHEMA_SQL,
   ROUTES,
@@ -260,6 +384,10 @@ module.exports = {
   readBody,
   parseBody,
   readFields,
+  parseCookies,
+  buildSetCookie,
+  createSessionStore,
+  sessionOf,
   createServer,
   start,
 };
