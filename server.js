@@ -15,6 +15,12 @@ const DEFAULT_DB_PATH = path.join(__dirname, 'data', 'app.db');
 const DEFAULT_PORT = 8080;
 const MAX_ECHO_LENGTH = 40;
 
+// generous for a poem, small enough that a flood cannot exhaust a t2.micro
+const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES) || 64 * 1024;
+
+// how much oversized payload to drain before cutting the socket, so 413 still reaches the client
+const DRAIN_LIMIT_FACTOR = 4;
+
 // mirrors the server.php?aksi= example in the brief, so every action shares one path
 const ENTRY_PATH = '/server.js';
 
@@ -89,6 +95,77 @@ function sendError(res, err) {
   sendJson(res, deliberate ? err.status : 500, {
     error: deliberate ? err.message : 'kesalahan server',
   });
+}
+
+function readBody(req, limit = MAX_BODY_BYTES) {
+  return new Promise((resolve, reject) => {
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > limit) {
+      reject(new HttpError(413, 'data terlalu besar'));
+      return;
+    }
+
+    const chunks = [];
+    let size = 0;
+    let over = false;
+
+    req.on('data', (chunk) => {
+      size += chunk.length;
+
+      if (size > limit) {
+        if (!over) {
+          over = true;
+          chunks.length = 0;
+          reject(new HttpError(413, 'data terlalu besar'));
+        }
+        // keep draining briefly so the 413 gets written, then cut a sender that ignores it
+        if (size > limit * DRAIN_LIMIT_FACTOR) req.destroy();
+        return;
+      }
+
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+      if (!over) resolve(Buffer.concat(chunks).toString('utf8'));
+    });
+    req.on('error', reject);
+  });
+}
+
+function parseBody(raw, contentType) {
+  // null prototype so a field named __proto__ cannot reach Object.prototype
+  const fields = Object.create(null);
+  if (!raw) return fields;
+
+  const type = String(contentType || '').split(';')[0].trim().toLowerCase();
+
+  if (type === 'application/json') {
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new HttpError(400, 'json tidak valid');
+    }
+
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new HttpError(400, 'body harus berupa objek');
+    }
+
+    for (const [key, value] of Object.entries(parsed)) fields[key] = value;
+    return fields;
+  }
+
+  if (type === 'application/x-www-form-urlencoded') {
+    for (const [key, value] of new URLSearchParams(raw)) fields[key] = value;
+    return fields;
+  }
+
+  throw new HttpError(415, `content-type tidak didukung: ${type.slice(0, MAX_ECHO_LENGTH)}`);
+}
+
+async function readFields(req) {
+  return parseBody(await readBody(req), req.headers['content-type']);
 }
 
 // 5. ACTIONS
@@ -172,6 +249,7 @@ if (require.main === module) {
 module.exports = {
   DEFAULT_DB_PATH,
   DEFAULT_PORT,
+  MAX_BODY_BYTES,
   ENTRY_PATH,
   SCHEMA_SQL,
   ROUTES,
@@ -179,6 +257,9 @@ module.exports = {
   openDatabase,
   foreignKeysEnabled,
   sendJson,
+  readBody,
+  parseBody,
+  readFields,
   createServer,
   start,
 };
