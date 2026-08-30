@@ -449,11 +449,13 @@ function notImplemented() {
 
 // 9. ROUTER
 
+// auth lives in this table rather than inside each handler, so a new protected action
+// cannot forget the guard
 const ROUTES = {
   register: { method: 'POST', handler: register },
   login: { method: 'POST', handler: login },
-  submit_puisi: { method: 'POST', handler: notImplemented },
-  daftar_puisi: { method: 'GET', handler: notImplemented },
+  submit_puisi: { method: 'POST', auth: true, handler: notImplemented },
+  daftar_puisi: { method: 'GET', auth: true, handler: notImplemented },
 };
 
 async function handleRequest(req, res, ctx) {
@@ -480,7 +482,15 @@ async function handleRequest(req, res, ctx) {
     throw new HttpError(405, `aksi ${aksi} hanya menerima ${route.method}`);
   }
 
-  await route.handler(req, res, ctx, url);
+  const session = route.auth ? sessionOf(req, ctx) : null;
+
+  // the stale cookie is left in the browser on purpose: watching it still be sent to a
+  // server that no longer knows it is the lesson this baseline exists to teach
+  if (route.auth && !session) {
+    throw new HttpError(401, 'sesi tidak valid, silakan masuk lagi');
+  }
+
+  await route.handler(req, res, ctx, { url, session });
 }
 
 function createServer(ctx) {
@@ -548,6 +558,7 @@ module.exports = {
   requireUsername,
   register,
   login,
+  handleRequest,
   createSessionStore,
   sessionOf,
   createServer,
