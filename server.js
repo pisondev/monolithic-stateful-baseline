@@ -400,6 +400,49 @@ async function register(req, res, ctx) {
   }
 }
 
+// a throwaway record so a missing username costs the same time as a wrong password,
+// otherwise the response delay alone tells an attacker which accounts exist
+let decoyRecord = null;
+
+async function verifyAgainstDecoy(password) {
+  if (!decoyRecord) decoyRecord = await hashPassword(crypto.randomBytes(32).toString('hex'));
+  await verifyPassword(password, decoyRecord);
+  return false;
+}
+
+async function login(req, res, ctx) {
+  const fields = await readFields(req);
+
+  // login does not reuse the register validators: rejecting a short password here would
+  // answer 400 before checking anything, which tells an attacker the input never matched
+  const username = String(fields.username || '').trim().toLowerCase();
+  const password = typeof fields.password === 'string' ? fields.password : '';
+
+  if (!username || !password) {
+    throw new HttpError(400, 'username dan password wajib diisi');
+  }
+
+  const user = ctx.db
+    .prepare('SELECT id, username, password, nama FROM users WHERE username = ?')
+    .get(username);
+
+  const ok = user
+    ? await verifyPassword(password, user.password)
+    : await verifyAgainstDecoy(password);
+
+  // one message for both failures, so neither reveals whether the username exists
+  if (!ok) throw new HttpError(401, 'username atau password salah');
+
+  const sid = ctx.sessions.create(user);
+
+  // never round down to zero: Max-Age=0 tells the browser to drop the cookie at once,
+  // which would silently break a short ttl set for a demo
+  const maxAgeSeconds = Math.max(1, Math.round(ctx.sessions.ttlMs / 1000));
+
+  res.setHeader('Set-Cookie', buildSetCookie(SESSION_COOKIE, sid, { maxAgeSeconds }));
+  sendJson(res, 200, { ok: true, username: user.username, nama: user.nama });
+}
+
 function notImplemented() {
   throw new HttpError(501, 'aksi ini belum tersedia');
 }
@@ -408,7 +451,7 @@ function notImplemented() {
 
 const ROUTES = {
   register: { method: 'POST', handler: register },
-  login: { method: 'POST', handler: notImplemented },
+  login: { method: 'POST', handler: login },
   submit_puisi: { method: 'POST', handler: notImplemented },
   daftar_puisi: { method: 'GET', handler: notImplemented },
 };
@@ -503,6 +546,8 @@ module.exports = {
   optionalText,
   requirePassword,
   requireUsername,
+  register,
+  login,
   createSessionStore,
   sessionOf,
   createServer,
