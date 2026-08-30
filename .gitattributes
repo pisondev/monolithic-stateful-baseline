@@ -1,0 +1,9 @@
+# Normalise to LF in the repository and in every working copy. The application is
+# developed on Windows and deployed to Linux, so mixed line endings would otherwise
+# reach the EC2 instance.
+* text=auto eol=lf
+
+# Binary assets, never normalised.
+*.png binary
+*.jpg binary
+*.pdf binary

@@ -1,0 +1,20 @@
+# Runtime state
+data/
+*.db
+*.db-journal
+*.db-wal
+
+# Dependencies
+node_modules/
+
+# Logs and local overrides
+*.log
+npm-debug.log*
+.env
+.env.*
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,17 @@
+{
+  "name": "monolithic-stateful-baseline",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Monolithic stateful baseline for PACS262521: one server-side script, RAM-local sessions, local SQLite.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "main": "server.js",
+  "engines": {
+    "node": ">=22.5.0 <23"
+  },
+  "scripts": {
+    "start": "node --experimental-sqlite server.js",
+    "test": "node --experimental-sqlite --test test/"
+  },
+  "dependencies": {}
+}
