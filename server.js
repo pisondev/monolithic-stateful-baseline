@@ -36,6 +36,15 @@ const SESSION_SWEEP_MS = Number(process.env.SESSION_SWEEP_MS) || 60 * 1000;
 // mirrors the server.php?aksi= example in the brief, so every action shares one path
 const ENTRY_PATH = '/server.js';
 
+const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 32, saltBytes: 16 };
+const USERNAME_PATTERN = /^[a-z0-9._-]+$/;
+const LIMITS = {
+  username: { min: 3, max: 32 },
+  password: { min: 8, max: 200 },
+  nama: { min: 1, max: 100 },
+  no_id: { max: 32 },
+};
+
 // 3. DATABASE
 
 // no_id and singular keyword are copied from the mandated schema, not typos
@@ -287,16 +296,118 @@ function sessionOf(req, ctx) {
   return ctx.sessions.get(parseCookies(req.headers.cookie)[SESSION_COOKIE]);
 }
 
-// 6. ACTIONS
+// 6. PASSWORD
+
+// the async form runs on the threadpool, so hashing one login does not stall every other
+// request on this single-threaded server
+function scrypt(plain, salt, keylen, params) {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(plain, salt, keylen, params, (err, key) => (err ? reject(err) : resolve(key)));
+  });
+}
+
+async function hashPassword(plain) {
+  const { N, r, p, keylen, saltBytes } = SCRYPT;
+  const salt = crypto.randomBytes(saltBytes);
+  const key = await scrypt(plain, salt, keylen, { N, r, p });
+  return ['scrypt', N, r, p, salt.toString('hex'), key.toString('hex')].join('$');
+}
+
+// hex decoding stops at the first invalid character and returns what it got, so a corrupt
+// record would otherwise decode to an empty buffer that compares equal to anything
+function fromHex(text) {
+  const buf = Buffer.from(String(text), 'hex');
+  return buf.length > 0 && buf.length * 2 === String(text).length ? buf : null;
+}
+
+// parameters are read back from the record, so old hashes stay verifiable after a retune
+async function verifyPassword(plain, stored) {
+  const parts = String(stored || '').split('$');
+  if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
+
+  const [, N, r, p, saltHex, keyHex] = parts;
+  const salt = fromHex(saltHex);
+  const expected = fromHex(keyHex);
+  if (!salt || !expected) return false;
+
+  try {
+    const actual = await scrypt(plain, salt, expected.length, {
+      N: Number(N),
+      r: Number(r),
+      p: Number(p),
+    });
+    return crypto.timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
+}
+
+// 7. VALIDATION
+
+function requireText(fields, name, { min = 1, max = 255 } = {}) {
+  const value = typeof fields[name] === 'string' ? fields[name].trim() : '';
+  if (!value) throw new HttpError(400, `${name} wajib diisi`);
+  if (value.length < min) throw new HttpError(400, `${name} minimal ${min} karakter`);
+  if (value.length > max) throw new HttpError(400, `${name} maksimal ${max} karakter`);
+  return value;
+}
+
+function optionalText(fields, name, { max = 255 } = {}) {
+  const value = typeof fields[name] === 'string' ? fields[name].trim() : '';
+  if (!value) return null;
+  if (value.length > max) throw new HttpError(400, `${name} maksimal ${max} karakter`);
+  return value;
+}
+
+// never trimmed: a leading or trailing space is a legitimate part of a password
+function requirePassword(fields) {
+  const value = typeof fields.password === 'string' ? fields.password : '';
+  const { min, max } = LIMITS.password;
+  if (!value) throw new HttpError(400, 'password wajib diisi');
+  if (value.length < min) throw new HttpError(400, `password minimal ${min} karakter`);
+  if (value.length > max) throw new HttpError(400, `password maksimal ${max} karakter`);
+  return value;
+}
+
+// lowercased so someone who registers as Budi can still log in as budi
+function requireUsername(fields) {
+  const value = requireText(fields, 'username', LIMITS.username).toLowerCase();
+  if (!USERNAME_PATTERN.test(value)) {
+    throw new HttpError(400, 'username hanya boleh huruf kecil, angka, titik, garis bawah, dan strip');
+  }
+  return value;
+}
+
+// 8. ACTIONS
+
+async function register(req, res, ctx) {
+  const fields = await readFields(req);
+  const username = requireUsername(fields);
+  const nama = requireText(fields, 'nama', LIMITS.nama);
+  const password = requirePassword(fields);
+  const noId = optionalText(fields, 'no_id', LIMITS.no_id);
+
+  const stored = await hashPassword(password);
+
+  try {
+    const info = ctx.db
+      .prepare('INSERT INTO users (username, password, nama, no_id) VALUES (?, ?, ?, ?)')
+      .run(username, stored, nama, noId);
+    sendJson(res, 201, { ok: true, id: Number(info.lastInsertRowid), username });
+  } catch (err) {
+    if (/UNIQUE/i.test(err.message)) throw new HttpError(409, 'username sudah dipakai');
+    throw err;
+  }
+}
 
 function notImplemented() {
   throw new HttpError(501, 'aksi ini belum tersedia');
 }
 
-// 7. ROUTER
+// 9. ROUTER
 
 const ROUTES = {
-  register: { method: 'POST', handler: notImplemented },
+  register: { method: 'POST', handler: register },
   login: { method: 'POST', handler: notImplemented },
   submit_puisi: { method: 'POST', handler: notImplemented },
   daftar_puisi: { method: 'GET', handler: notImplemented },
@@ -335,7 +446,7 @@ function createServer(ctx) {
   });
 }
 
-// 8. ENTRY POINT
+// 10. ENTRY POINT
 
 function start() {
   const dbPath = process.env.DB_PATH || DEFAULT_DB_PATH;
@@ -366,7 +477,7 @@ if (require.main === module) {
   start();
 }
 
-// 9. EXPORTS
+// 11. EXPORTS
 
 module.exports = {
   DEFAULT_DB_PATH,
@@ -386,6 +497,12 @@ module.exports = {
   readFields,
   parseCookies,
   buildSetCookie,
+  hashPassword,
+  verifyPassword,
+  requireText,
+  optionalText,
+  requirePassword,
+  requireUsername,
   createSessionStore,
   sessionOf,
   createServer,
