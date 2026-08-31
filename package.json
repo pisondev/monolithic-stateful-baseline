@@ -11,7 +11,7 @@
   },
   "scripts": {
     "start": "node --experimental-sqlite server.js",
-    "test": "node --experimental-sqlite --test test/"
+    "test": "node --experimental-sqlite --test"
   },
   "dependencies": {}
 }
