@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kumpulan Puisi</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Kumpulan Puisi</h1>
+  <p class="sub">Aplikasi monolitik stateful, sesi disimpan di memori server</p>
+</header>
+
+<p id="pesan" class="pesan" hidden></p>
+
+<main>
+
+  <section id="tamu">
+    <div class="kartu">
+      <h2>Masuk</h2>
+      <form id="form-masuk" autocomplete="on">
+        <label for="masuk-username">Username</label>
+        <input id="masuk-username" name="username" required autocomplete="username">
+
+        <label for="masuk-password">Password</label>
+        <input id="masuk-password" name="password" type="password" required autocomplete="current-password">
+
+        <button type="submit">Masuk</button>
+      </form>
+    </div>
+
+    <div class="kartu">
+      <h2>Daftar Akun</h2>
+      <form id="form-daftar" autocomplete="on">
+        <label for="daftar-username">Username</label>
+        <input id="daftar-username" name="username" required autocomplete="username">
+        <small>Huruf kecil, angka, titik, garis bawah, dan strip. Minimal 3 karakter.</small>
+
+        <label for="daftar-nama">Nama Lengkap</label>
+        <input id="daftar-nama" name="nama" required autocomplete="name">
+
+        <label for="daftar-no-id">Nomor Identitas <span class="opsional">opsional</span></label>
+        <input id="daftar-no-id" name="no_id" autocomplete="off">
+
+        <label for="daftar-password">Password</label>
+        <input id="daftar-password" name="password" type="password" required autocomplete="new-password">
+        <small>Minimal 8 karakter.</small>
+
+        <button type="submit">Daftar</button>
+      </form>
+    </div>
+  </section>
+
+  <section id="pengguna" hidden>
+    <div class="bar">
+      <p>Masuk sebagai <strong id="nama-pengguna"></strong></p>
+      <button id="tombol-keluar" type="button" class="sekunder">Keluar</button>
+    </div>
+
+    <div class="kartu">
+      <h2>Kirim Puisi</h2>
+      <form id="form-puisi">
+        <label for="puisi-judul">Judul</label>
+        <input id="puisi-judul" name="judul" required maxlength="150">
+
+        <div class="baris">
+          <div>
+            <label for="puisi-kategori">Kategori</label>
+            <input id="puisi-kategori" name="kategori" required maxlength="50" list="kategori-umum">
+            <datalist id="kategori-umum">
+              <option value="Alam"></option>
+              <option value="Cinta"></option>
+              <option value="Religi"></option>
+              <option value="Sosial"></option>
+              <option value="Bebas"></option>
+            </datalist>
+          </div>
+          <div>
+            <label for="puisi-tanggal">Tanggal Submit</label>
+            <input id="puisi-tanggal" name="tgl_submit" type="date" required>
+          </div>
+        </div>
+
+        <label for="puisi-keywords">Keywords <span class="opsional">opsional</span></label>
+        <input id="puisi-keywords" name="keywords" maxlength="200" placeholder="hujan, kenangan">
+
+        <label for="puisi-isi">Isi</label>
+        <textarea id="puisi-isi" name="isi" rows="10" required maxlength="20000"></textarea>
+
+        <button type="submit">Kirim</button>
+      </form>
+    </div>
+
+    <div class="kartu">
+      <h2>Koleksi Puisi Saya</h2>
+      <table id="tabel-puisi">
+        <thead>
+          <tr>
+            <th>Tanggal Submit</th>
+            <th>Judul Puisi</th>
+            <th>Kategori</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p id="kosong" class="kosong" hidden>Belum ada puisi yang dikirim.</p>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <p id="info-server" class="info">Menghubungi server...</p>
+  <p class="info">
+    Buka tab <strong>Network</strong> pada browser untuk melihat header
+    <code>Set-Cookie</code> saat masuk dan header <code>Cookie</code> pada setiap
+    permintaan berikutnya. Sesi tidak disimpan di <code>localStorage</code>.
+  </p>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

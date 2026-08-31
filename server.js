@@ -552,7 +552,49 @@ function daftarPuisi(req, res, ctx, { session }) {
   sendJson(res, 200, { items });
 }
 
-// 9. ROUTER
+// 9. STATIC FILES
+
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const MIME_TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+};
+
+function serveStatic(res, pathname) {
+  let relative;
+  try {
+    relative = decodeURIComponent(pathname === '/' ? '/index.html' : pathname).slice(1);
+  } catch {
+    throw new HttpError(404, 'alamat tidak ditemukan');
+  }
+
+  const target = path.resolve(PUBLIC_DIR, relative);
+
+  // resolve collapses ../ and treats a leading slash as absolute, so the result has to be
+  // checked rather than the input
+  if (target !== PUBLIC_DIR && !target.startsWith(PUBLIC_DIR + path.sep)) {
+    throw new HttpError(404, 'alamat tidak ditemukan');
+  }
+
+  let body;
+  try {
+    body = fs.readFileSync(target);
+  } catch {
+    throw new HttpError(404, 'alamat tidak ditemukan');
+  }
+
+  res.writeHead(200, {
+    'Content-Type': MIME_TYPES[path.extname(target)] || 'application/octet-stream',
+    'Content-Length': body.length,
+    'Cache-Control': 'no-store',
+  });
+  res.end(body);
+}
+
+// 10. ROUTER
 
 // auth lives in this table rather than inside each handler, so a new protected action
 // cannot forget the guard
@@ -569,8 +611,15 @@ const ROUTES = {
 async function handleRequest(req, res, ctx) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
+  // the single-path rule covers the actions; the frontend is plain files beside them
   if (url.pathname !== ENTRY_PATH) {
-    throw new HttpError(404, 'alamat tidak ditemukan');
+    if (req.method !== 'GET') {
+      res.setHeader('Allow', 'GET');
+      throw new HttpError(405, 'berkas statis hanya menerima GET');
+    }
+
+    serveStatic(res, url.pathname);
+    return;
   }
 
   const aksi = url.searchParams.get('aksi');
@@ -607,7 +656,7 @@ function createServer(ctx) {
   });
 }
 
-// 10. ENTRY POINT
+// 11. ENTRY POINT
 
 function start() {
   const dbPath = process.env.DB_PATH || DEFAULT_DB_PATH;
@@ -638,7 +687,7 @@ if (require.main === module) {
   start();
 }
 
-// 11. EXPORTS
+// 12. EXPORTS
 
 module.exports = {
   DEFAULT_DB_PATH,
@@ -677,6 +726,7 @@ module.exports = {
   handleRequest,
   createSessionStore,
   sessionOf,
+  serveStatic,
   createServer,
   start,
 };
