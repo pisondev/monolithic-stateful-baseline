@@ -509,8 +509,16 @@ async function submitPuisi(req, res, ctx, { session }) {
   sendJson(res, 201, { ok: true, id: Number(info.lastInsertRowid) });
 }
 
-function notImplemented() {
-  throw new HttpError(501, 'aksi ini belum tersedia');
+// scoped to the session owner, and projecting exactly the three columns the brief lists:
+// the specified output has no author field, which only reads as complete for one author
+function daftarPuisi(req, res, ctx, { session }) {
+  const items = ctx.db
+    .prepare(
+      'SELECT tgl_submit, judul, kategori FROM puisi WHERE user_id = ? ORDER BY tgl_submit DESC, id DESC',
+    )
+    .all(session.userId);
+
+  sendJson(res, 200, { items });
 }
 
 // 9. ROUTER
@@ -521,7 +529,7 @@ const ROUTES = {
   register: { method: 'POST', handler: register },
   login: { method: 'POST', handler: login },
   submit_puisi: { method: 'POST', auth: true, handler: submitPuisi },
-  daftar_puisi: { method: 'GET', auth: true, handler: notImplemented },
+  daftar_puisi: { method: 'GET', auth: true, handler: daftarPuisi },
 };
 
 async function handleRequest(req, res, ctx) {
@@ -625,6 +633,7 @@ module.exports = {
   register,
   login,
   submitPuisi,
+  daftarPuisi,
   todayLocal,
   requireDate,
   requirePoemBody,
