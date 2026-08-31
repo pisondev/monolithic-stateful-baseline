@@ -7,6 +7,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
+const os = require('node:os');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
@@ -509,6 +510,36 @@ async function submitPuisi(req, res, ctx, { session }) {
   sendJson(res, 201, { ok: true, id: Number(info.lastInsertRowid) });
 }
 
+// public and idempotent, so leaving never fails; clearing the cookie is right here
+// because the user asked to go, unlike the 401 path which keeps it as evidence
+function logout(req, res, ctx) {
+  const sid = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+  if (sid) ctx.sessions.destroy(sid);
+
+  res.setHeader('Set-Cookie', buildSetCookie(SESSION_COOKIE, '', { maxAgeSeconds: 0 }));
+  sendJson(res, 200, { ok: true });
+}
+
+// public so the page can ask who it is on load without a 401 in the console
+function whoami(req, res, ctx) {
+  const session = sessionOf(req, ctx);
+  sendJson(res, 200, {
+    user: session ? { username: session.username, nama: session.nama } : null,
+  });
+}
+
+// the instrument for the report: restart the service and pid changes while sessions drops
+// to zero, on the same screen that starts refusing the cookie the browser still holds
+function serverInfo(req, res, ctx) {
+  sendJson(res, 200, {
+    hostname: os.hostname(),
+    pid: process.pid,
+    uptime_seconds: Math.round(process.uptime()),
+    sessions: ctx.sessions.size,
+    node: process.version,
+  });
+}
+
 // scoped to the session owner, and projecting exactly the three columns the brief lists:
 // the specified output has no author field, which only reads as complete for one author
 function daftarPuisi(req, res, ctx, { session }) {
@@ -530,6 +561,9 @@ const ROUTES = {
   login: { method: 'POST', handler: login },
   submit_puisi: { method: 'POST', auth: true, handler: submitPuisi },
   daftar_puisi: { method: 'GET', auth: true, handler: daftarPuisi },
+  logout: { method: 'POST', handler: logout },
+  whoami: { method: 'GET', handler: whoami },
+  server_info: { method: 'GET', handler: serverInfo },
 };
 
 async function handleRequest(req, res, ctx) {
@@ -634,6 +668,9 @@ module.exports = {
   login,
   submitPuisi,
   daftarPuisi,
+  logout,
+  whoami,
+  serverInfo,
   todayLocal,
   requireDate,
   requirePoemBody,
