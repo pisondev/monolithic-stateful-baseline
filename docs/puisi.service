@@ -1,0 +1,36 @@
+[Unit]
+Description=Monolithic stateful baseline, PACS262521 Assignment 1
+Documentation=https://github.com/pisondev/monolithic-stateful-baseline
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/monolithic-stateful-baseline
+
+# node:sqlite is built in from 22.5 but still needs this flag on Node 22
+ExecStart=/usr/bin/node --experimental-sqlite server.js
+
+Environment=PORT=8080
+Environment=DB_PATH=/home/ec2-user/monolithic-stateful-baseline/data/app.db
+
+# restarting is the demonstration, so make it fast and reliable
+Restart=always
+RestartSec=1
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=puisi
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+
+# the home directory is read-only apart from this one path, so the data directory has to
+# exist before the first start; the app cannot create it from inside the namespace
+ReadWritePaths=/home/ec2-user/monolithic-stateful-baseline/data
+
+[Install]
+WantedBy=multi-user.target
