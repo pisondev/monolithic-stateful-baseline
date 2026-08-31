@@ -11,6 +11,9 @@
 
 * { box-sizing: border-box; }
 
+/* the browser hides [hidden] from its own stylesheet, which any author display rule outranks */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   padding: 0 1rem 3rem;

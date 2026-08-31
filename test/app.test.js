@@ -351,6 +351,29 @@ test('the frontend obeys the constraints the brief sets for it', () => {
   }
 });
 
+// found by driving a real browser, not by any assertion here: the guest forms stayed on
+// screen after login because an author display rule outranks the browser's own [hidden]
+test('every section the page toggles can actually be hidden by the hidden attribute', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'public/style.css'), 'utf8');
+  const js = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8');
+
+  const adaAturanUmum = /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/.test(css);
+
+  for (const [, id] of js.matchAll(/el\('([a-z-]+)'\)\.hidden\s*=/g)) {
+    assert.ok(
+      new RegExp(`id="${id}"`).test(html),
+      `app.js toggles #${id} but index.html has no such element`,
+    );
+
+    // an id rule that sets display beats the user agent rule for [hidden]
+    const aturanId = css.match(new RegExp(`#${id}\\s*\\{([^}]*)\\}`));
+    if (aturanId && /display\s*:/.test(aturanId[1])) {
+      assert.ok(adaAturanUmum, `#${id} sets display in CSS, so [hidden] needs !important to win`);
+    }
+  }
+});
+
 test('the project still declares no runtime dependencies', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
